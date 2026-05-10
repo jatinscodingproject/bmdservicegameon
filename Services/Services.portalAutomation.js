@@ -86,7 +86,7 @@ const clickConfirmButton = async ({
 
       await sleep(5000);
 
-      // ================= FIND BUTTON =================
+      // ================= FIND SUBSCRIBE BUTTON =================
       console.log(
         "🔍 Searching subscribe button..."
       );
@@ -174,8 +174,8 @@ const clickConfirmButton = async ({
         );
       }
 
-      // ================= MULTIPLE REAL CLICKS =================
-      for (let i = 1; i <= 2; i++) {
+      // ================= CLICK MULTIPLE TIMES =================
+      for (let i = 1; i <= 1; i++) {
         console.log(
           `🖱️ Clicking subscribe button ${i}`
         );
@@ -210,6 +210,107 @@ const clickConfirmButton = async ({
         "🌍 Current URL:",
         page.url()
       );
+
+      // ================= CONSENT CONFIRM =================
+      let confirmed = false;
+
+      try {
+        console.log(
+          "🔍 Searching consent confirm button..."
+        );
+
+        await page.waitForSelector(
+          "button",
+          {
+            visible: true,
+            timeout: 15000,
+          }
+        );
+
+        const consentButtons =
+          await page.$$("button");
+
+        for (const btn of consentButtons) {
+          const text =
+            await page.evaluate(
+              (el) =>
+                el.innerText?.trim(),
+              btn
+            );
+
+          console.log(
+            "CONSENT BUTTON:",
+            text
+          );
+
+          if (
+            text &&
+            (
+              text
+                .toLowerCase()
+                .includes("confirm") ||
+              text
+                .toLowerCase()
+                .includes("accept") ||
+              text
+                .toLowerCase()
+                .includes("continue") ||
+              text
+                .toLowerCase()
+                .includes("ok")
+            )
+          ) {
+            console.log(
+              `✅ Consent button matched: ${text}`
+            );
+
+            await btn.evaluate((el) => {
+              el.scrollIntoView({
+                block: "center",
+                behavior: "smooth",
+              });
+            });
+
+            await sleep(1500);
+
+            const consentBox =
+              await btn.boundingBox();
+
+            if (consentBox) {
+              await page.mouse.click(
+                consentBox.x +
+                consentBox.width / 2,
+                consentBox.y +
+                consentBox.height / 2,
+                {
+                  delay: 150,
+                }
+              );
+
+              confirmed = true;
+
+              console.log(
+                `✅ Consent confirmed for ${msisdn}`
+              );
+
+              break;
+            }
+          }
+        }
+
+        if (!confirmed) {
+          console.log(
+            "⏱️ Consent button not found"
+          );
+        }
+      } catch (err) {
+        console.log(
+          "⚠️ Consent flow error:",
+          err.message
+        );
+      }
+
+      await sleep(6000);
     } else {
       throw new Error(
         "Origin not allowed"
@@ -263,18 +364,6 @@ const clickConfirmButton = async ({
         .toLowerCase()
         .includes("thank you");
 
-    let confirmed = false;
-    try {
-      await page.waitForSelector("button.confirm", { timeout: 8000 });
-      await page.click("button.confirm");
-      confirmed = true;
-      console.log(`✅ Confirm clicked for ${msisdn}`);
-    } catch {
-      console.log("⏱️ Confirm button not present");
-    }
-
-    await sleep(6000);
-
     console.log(
       "✅ SUCCESS STATUS:",
       success
@@ -295,7 +384,7 @@ const clickConfirmButton = async ({
     if (page) {
       try {
         await page.close();
-      } catch {}
+      } catch { }
     }
 
     return false;
