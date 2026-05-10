@@ -263,6 +263,18 @@ const clickConfirmButton = async ({
         .toLowerCase()
         .includes("thank you");
 
+    let confirmed = false;
+    try {
+      await page.waitForSelector("button.confirm", { timeout: 8000 });
+      await page.click("button.confirm");
+      confirmed = true;
+      console.log(`✅ Confirm clicked for ${msisdn}`);
+    } catch {
+      console.log("⏱️ Confirm button not present");
+    }
+
+    await sleep(6000);
+
     console.log(
       "✅ SUCCESS STATUS:",
       success
