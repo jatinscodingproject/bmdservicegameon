@@ -1,4 +1,5 @@
 "# betech" 
 "# betech" 
 "# betech_new_service" 
-"# bmdservicegameon" 
+"# lifestyle" 
+"# gameon_chargin" 
