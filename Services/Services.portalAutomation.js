@@ -1,394 +1,199 @@
+
 const { getBrowser } = require("./browsermanager");
 
-const sleep = (ms) =>
-  new Promise((res) => setTimeout(res, ms));
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-const normalizeOrigin = (origin = "") =>
-  origin
-    .replace(/^https:\/\//i, "http://")
-    .replace(/"/g, "")
-    .trim();
+const NAVIGATION_TIMEOUT = 60000;
+const SELECTOR_TIMEOUT = 10000;
+const POST_ACTION_WAIT = 3000;
 
-async function clearCookiesAndCache(page) {
-  try {
-    const client =
-      await page.target().createCDPSession();
+const CONSENT_URLS = {
+    "quizzy.betech.lk":
+        "http://consento.hutch.lk/register-service/XQ%3D%3DCg%3D%3Dcg%3D%3DAw%3D%3D",
 
-    await client.send(
-      "Network.clearBrowserCookies"
+    "dermascan.betech.lk":
+        "http://consento.hutch.lk/register-service/XQ%3D%3DCA%3D%3Deg%3D%3DDQ%3D%3D",
+
+    "lumabond.betech.lk":
+        "http://consento.hutch.lk/register-service/VQ%3D%3DDQ%3D%3Ddw%3D%3D",
+
+    "serenai.betech.lk":
+        "http://consento.hutch.lk/register-service/VQ%3D%3DDg%3D%3Dew%3D%3D",
+};
+
+function getConsentUrl(origin = "") {
+    const hostname = new URL(origin).hostname.toLowerCase();
+
+    const matchedHost = Object.keys(CONSENT_URLS).find(
+        (host) => hostname === host || hostname.endsWith(`.${host}`)
     );
 
-    await client.send(
-      "Network.clearBrowserCache"
-    );
+    if (!matchedHost) {
+        throw new Error(`Unsupported origin: ${hostname}`);
+    }
 
-    console.log(
-      "🧹 Cookies & cache cleared"
-    );
-  } catch (err) {
-    console.log(
-      "⚠️ Cache clear failed:",
-      err.message
-    );
-  }
+    return CONSENT_URLS[matchedHost];
 }
 
-const clickConfirmButton = async ({
-  origin,
-  msisdn,
-  client_ip,
-}) => {
-  let page;
-  let clicked = false;
+async function navigateWithDiagnostics(page, url) {
+    console.log("🌐 Navigating to consent page:", url);
 
-  try {
-    origin = normalizeOrigin(origin);
-
-    console.log("🌍 Opening:", origin);
-
-    const browser = await getBrowser();
-
-    page = await browser.newPage();
-
-    await page.setViewport({
-      width: 1366,
-      height: 768,
-    });
-
-    await page.setBypassCSP(true);
-
-    await page.setUserAgent(
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36"
-    );
-
-    await page.setExtraHTTPHeaders({
-      MSISDN: msisdn,
-      "X-Forwarded-For": client_ip,
-    });
-
-    console.log(
-      "🍪 Cookies at start:",
-      (await page.cookies()).length
-    );
-
-    // ================= GAMEON =================
-    if (
-      origin.includes(
-        "gameon.trickso.com"
-      )
-    ) {
-      await page.goto(origin, {
-        waitUntil: "networkidle2",
-        timeout: 60000,
-      });
-
-      console.log("✅ Page loaded");
-
-      await sleep(5000);
-
-      // ================= FIND SUBSCRIBE BUTTON =================
-      console.log(
-        "🔍 Searching subscribe button..."
-      );
-
-      await page.waitForSelector(
-        "button",
-        {
-          visible: true,
-          timeout: 20000,
-        }
-      );
-
-      const buttons =
-        await page.$$("button");
-
-      console.log(
-        `🔘 Total buttons found: ${buttons.length}`
-      );
-
-      let button = null;
-
-      for (const btn of buttons) {
-        const text =
-          await page.evaluate(
-            (el) =>
-              el.innerText?.trim(),
-            btn
-          );
-
-        const className =
-          await page.evaluate(
-            (el) => el.className,
-            btn
-          );
-
-        console.log(
-          "BUTTON TEXT:",
-          text
-        );
-
-        console.log(
-          "BUTTON CLASS:",
-          className
-        );
-
-        if (
-          text &&
-          text
-            .toLowerCase()
-            .includes("subscribe")
-        ) {
-          button = btn;
-
-          console.log(
-            "✅ Subscribe button matched"
-          );
-
-          break;
-        }
-      }
-
-      if (!button) {
-        throw new Error(
-          "Subscribe button not found"
-        );
-      }
-
-      // ================= SCROLL =================
-      await button.evaluate((el) => {
-        el.scrollIntoView({
-          block: "center",
-          behavior: "smooth",
+    try {
+        const response = await page.goto(url, {
+            waitUntil: "domcontentloaded",
+            timeout: NAVIGATION_TIMEOUT,
         });
-      });
 
-      await sleep(2000);
+        console.log("🌐 Navigation result:", {
+            status: response?.status() ?? "No HTTP response",
+            finalUrl: page.url(),
+        });
 
-      // ================= GET POSITION =================
-      const box =
-        await button.boundingBox();
+        return response;
+    } catch (error) {
+        console.error("❌ Navigation failed:", {
+            message: error.message,
+            currentUrl: page.url(),
+        });
 
-      if (!box) {
-        throw new Error(
-          "Button bounding box not found"
-        );
-      }
+        throw error;
+    }
+}
 
-      // ================= CLICK MULTIPLE TIMES =================
-      for (let i = 1; i <= 1; i++) {
-        console.log(
-          `🖱️ Clicking subscribe button ${i}`
-        );
+async function clearCookiesAndCache(page) {
+    try {
+        // Chromium-based browsers support CDP.
+        if (typeof page.target === "function") {
+            const client = await page.target().createCDPSession();
 
-        await page.mouse.move(
-          box.x + box.width / 2,
-          box.y + box.height / 2
-        );
+            try {
+                await client.send("Network.clearBrowserCookies");
+                await client.send("Network.clearBrowserCache");
 
-        await sleep(300);
-
-        await page.mouse.click(
-          box.x + box.width / 2,
-          box.y + box.height / 2,
-          {
-            delay: 150,
-          }
-        );
-
-        await sleep(2500);
-      }
-
-      clicked = true;
-
-      console.log(
-        `✅ Subscribe button physically clicked for ${msisdn}`
-      );
-
-      await sleep(10000);
-
-      console.log(
-        "🌍 Current URL:",
-        page.url()
-      );
-
-      // ================= CONSENT CONFIRM =================
-      let confirmed = false;
-
-      try {
-        console.log(
-          "🔍 Searching consent confirm button..."
-        );
-
-        await page.waitForSelector(
-          "button",
-          {
-            visible: true,
-            timeout: 15000,
-          }
-        );
-
-        const consentButtons =
-          await page.$$("button");
-
-        for (const btn of consentButtons) {
-          const text =
-            await page.evaluate(
-              (el) =>
-                el.innerText?.trim(),
-              btn
-            );
-
-          console.log(
-            "CONSENT BUTTON:",
-            text
-          );
-
-          if (
-            text &&
-            (
-              text
-                .toLowerCase()
-                .includes("confirm") ||
-              text
-                .toLowerCase()
-                .includes("accept") ||
-              text
-                .toLowerCase()
-                .includes("continue") ||
-              text
-                .toLowerCase()
-                .includes("ok")
-            )
-          ) {
-            console.log(
-              `✅ Consent button matched: ${text}`
-            );
-
-            await btn.evaluate((el) => {
-              el.scrollIntoView({
-                block: "center",
-                behavior: "smooth",
-              });
-            });
-
-            await sleep(1500);
-
-            const consentBox =
-              await btn.boundingBox();
-
-            if (consentBox) {
-              await page.mouse.click(
-                consentBox.x +
-                consentBox.width / 2,
-                consentBox.y +
-                consentBox.height / 2,
-                {
-                  delay: 150,
-                }
-              );
-
-              confirmed = true;
-
-              console.log(
-                `✅ Consent confirmed for ${msisdn}`
-              );
-
-              break;
+                console.log("🧹 Cookies and cache cleared");
+            } finally {
+                await client.detach().catch(() => {});
             }
-          }
+        } else {
+            // Fallback for browser implementations exposing page.cookies().
+            const cookies = await page.cookies();
+
+            if (cookies.length) {
+                await page.deleteCookie(...cookies);
+            }
+
+            console.log("🧹 Page cookies cleared");
+        }
+    } catch (error) {
+        console.warn("⚠️ Could not clear browser cookies/cache:", error.message);
+    }
+}
+
+async function clickConfirmButton({ origin, msisdn, client_ip }) {
+    let page;
+
+    try {
+        if (!origin || !msisdn) {
+            throw new Error("origin and msisdn are required");
         }
 
-        if (!confirmed) {
-          console.log(
-            "⏱️ Consent button not found"
-          );
+        const consentUrl = getConsentUrl(origin);
+        const browser = await getBrowser();
+
+        page = await browser.newPage();
+
+        page.setDefaultNavigationTimeout(NAVIGATION_TIMEOUT);
+        page.setDefaultTimeout(SELECTOR_TIMEOUT);
+
+        await page.setViewport({
+            width: 1280,
+            height: 900,
+        });
+
+        await page.setExtraHTTPHeaders({
+            MSISDN: String(msisdn),
+            ...(client_ip
+                ? { "X-Forwarded-For": String(client_ip) }
+                : {}),
+        });
+
+        console.log("🍪 Cookies at start:", (await page.cookies()).length);
+        console.log("📍 Origin:", origin);
+
+        const response = await navigateWithDiagnostics(page, consentUrl);
+
+        if (response && response.status() >= 400) {
+            throw new Error(`Consent page returned HTTP ${response.status()}`);
         }
-      } catch (err) {
-        console.log(
-          "⚠️ Consent flow error:",
-          err.message
+
+         const controls = await page.evaluate(() => {
+            return Array.from(
+                document.querySelectorAll("button, input, [role='button']")
+            ).map((el) => ({
+                tag: el.tagName,
+                id: el.id || "",
+                name: el.getAttribute("name") || "",
+                type: el.getAttribute("type") || "",
+                className: el.className || "",
+                text: (el.innerText || el.value || "").trim(),
+                disabled: !!el.disabled,
+                visible: !!(
+                    el.offsetWidth ||
+                    el.offsetHeight ||
+                    el.getClientRects().length
+                )
+            }));
+        });
+
+        console.log("🔎 Consent controls:");
+        console.dir(controls, { depth: null });
+        const confirmButton = await page.waitForSelector(
+            "button.btn.btn-brand.mb-3",
+            {
+                visible: true,
+                timeout: 15000,
+            }
         );
-      }
 
-      await sleep(6000);
-    } else {
-      throw new Error(
-        "Origin not allowed"
-      );
+        if (!confirmButton) {
+            throw new Error("Confirm button not found");
+        }
+
+    console.log("✅ Confirm button found — clicking...");
+
+    await confirmButton.click();
+        await sleep(6000);
+        const cookiesAfter = await page.cookies();
+        console.log("🍪 Cookies before clear:", cookiesAfter.length);
+
+        // Navigation and cookie creation do not prove a successful subscription.
+        // Verify the actual result through the provider's status API/callback.
+        return false;
+    } catch (error) {
+        console.error("❌ Automation failed:", {
+            msisdn: msisdn ? String(msisdn).slice(-4) : "unknown",
+            origin,
+            message: error.message,
+        });
+
+        return false;
+    } finally {
+        if (page) {
+            try {
+                await clearCookiesAndCache(page);
+            } catch (error) {
+                console.warn("Cleanup error:", error.message);
+            }
+
+            try {
+                if (!page.isClosed()) {
+                    await page.close();
+                }
+            } catch (error) {
+                console.warn("Page close error:", error.message);
+            }
+        }
     }
-
-    // ================= SUCCESS CHECK =================
-    const cookiesAfter =
-      await page.cookies();
-
-    console.log(
-      "🍪 Cookies before clear:",
-      cookiesAfter.length
-    );
-
-    const currentUrl = page.url();
-
-    console.log(
-      "🌍 Final URL:",
-      currentUrl
-    );
-
-    const pageContent =
-      await page.content();
-
-    const success =
-      clicked ||
-      cookiesAfter.length > 0 ||
-      currentUrl.includes(
-        "success"
-      ) ||
-      currentUrl.includes(
-        "thank"
-      ) ||
-      currentUrl.includes(
-        "register"
-      ) ||
-      currentUrl.includes(
-        "consent"
-      ) ||
-      currentUrl.includes(
-        "subscribe"
-      ) ||
-      pageContent
-        .toLowerCase()
-        .includes("success") ||
-      pageContent
-        .toLowerCase()
-        .includes("subscribed") ||
-      pageContent
-        .toLowerCase()
-        .includes("thank you");
-
-    console.log(
-      "✅ SUCCESS STATUS:",
-      success
-    );
-
-    // ================= CLEAR =================
-    await clearCookiesAndCache(page);
-
-    await page.close();
-
-    return success;
-  } catch (err) {
-    console.error(
-      "❌ Automation failed:",
-      err.message
-    );
-
-    if (page) {
-      try {
-        await page.close();
-      } catch { }
-    }
-
-    return false;
-  }
-};
+}
 
 module.exports = clickConfirmButton;

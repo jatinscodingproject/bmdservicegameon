@@ -1,11 +1,11 @@
 const cron = require("node-cron");
+const User = require("../Models/models.customer");
 const clickConfirmButton = require("../Services/Services.portalAutomation");
 const { Op } = require("sequelize");
-const gameon = require("../Models/models.gameon");
 
 const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
 
-const DAILY_LIMIT = 300;
+const DAILY_LIMIT = 10000;
 
 let isRunning = false;
 
@@ -20,25 +20,28 @@ cron.schedule("* * * * *", async () => {
 
   try {
     // Get all unique origins
-    const origins = [
-      'http://gameon.trickso.com/subscribe"',
+     const origins = [
+      //"https://quizzy.betech.lk",
+      //"https://dermascan.betech.lk",
+      //"https://lumabond.betech.lk",
+      "https://serenai.betech.lk",
     ];
+
     for (const origin of origins) {
       console.log(`🚀 Processing ${origin}`);
 
+      // Today's start/end
       const startOfDay = new Date();
       startOfDay.setHours(0, 0, 0, 0);
 
       const endOfDay = new Date();
       endOfDay.setHours(23, 59, 59, 999);
 
-      const todayChargedCount = await gameon.count({
+      // Count today's successful charges
+      const todayChargedCount = await User.count({
         where: {
           origin,
-          is_chargin: 1,
-          updatedAt: {
-            [Op.between]: [startOfDay, endOfDay],
-          },
+          is_chargin: 0,
         },
       });
 
@@ -54,13 +57,29 @@ cron.schedule("* * * * *", async () => {
       const remaining = DAILY_LIMIT - todayChargedCount;
 
       // Fetch only remaining users
-      const customers = await gameon.findAll({
-        where: {
-          origin,
-          is_chargin: 0,
-        },
-        limit: remaining,
+      console.log("Origin being searched:", JSON.stringify(origin));
+
+      const matchingOrigins = await User.findAll({
+          attributes: ["origin"],
+          group: ["origin"],
+          raw: true,
       });
+
+      console.log("Origins in database:", matchingOrigins);
+
+      const customers = await User.findAll({
+          where: {
+              origin,
+              is_chargin: 0,
+              createdAt: {
+                  [Op.gte]: new Date(Date.now() - 15 * 24 * 60 * 60 * 1000),
+              },
+          },
+          limit: remaining,
+          order: [["createdAt", "ASC"]],
+      });
+
+      console.log("Customers found:", customers.length);
 
       if (!customers.length) {
         console.log(`⚠️ No customers found for ${origin}`);
@@ -72,9 +91,9 @@ cron.schedule("* * * * *", async () => {
       for (const customer of customers) {
         try {
           const success = await clickConfirmButton({
-            origin: "http://gameon.trickso.com/subscribe",
+            origin: customer.origin,
             msisdn: customer.msisdn,
-            client_ip: "103.247.50.175",
+            client_ip: customer.client_ip,
           });
 
           if (success) {
@@ -113,4 +132,4 @@ cron.schedule("* * * * *", async () => {
     isRunning = false;
     console.log("⏳ Cycle completed, waiting for next tick");
   }
-}); 9
+});
